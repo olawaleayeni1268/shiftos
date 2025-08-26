@@ -16,3 +16,5 @@ build/
 
 # Generated registrants (Flutter re-generates)
 **/GeneratedPluginRegistrant.*
+.flutter-plugins-dependencies
+.metadata
