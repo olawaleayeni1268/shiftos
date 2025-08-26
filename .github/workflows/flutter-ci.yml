@@ -1,0 +1,19 @@
+name: flutter-ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 'stable'
+      - run: flutter --version
+      - run: flutter pub get
+      - run: flutter analyze
+      # build with harmless dummy defines so the compile step always works
+      - run: flutter build web --release --dart-define=SUPABASE_URL=https://example.supabase.co --dart-define=SUPABASE_ANON_KEY=dummy
