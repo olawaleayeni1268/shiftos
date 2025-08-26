@@ -1,0 +1,36 @@
+name: shiftos
+description: A new Flutter project for ShiftOS MVP
+publish_to: "none"
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Core Flutter packages
+  cupertino_icons: ^1.0.8
+
+  # State management
+  provider: ^6.1.2
+
+  # Networking / system helpers
+  connectivity_plus: ^6.0.3
+  url_launcher: ^6.3.0
+  webview_flutter: ^4.8.0
+
+  # Local persistence
+  shared_preferences: ^2.3.0
+  supabase_flutter: ^2.9.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^3.0.2
+
+flutter:
+  uses-material-design: true
