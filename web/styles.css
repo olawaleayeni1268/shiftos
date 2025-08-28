@@ -1,0 +1,5 @@
+/* web/styles.css */
+:root { color-scheme: light dark; }
+body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, 'Helvetica Neue', Arial, 'Noto Sans', 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', sans-serif; }
+.loading { padding: 1rem; }
+.error { display: none; color: #b00020; padding: 1rem; }

@@ -1,124 +1,76 @@
--- ShiftOS Backend — all.sql
--- ONE place to control the "today" boundary via shift_today()
--- To use UTC instead of Africa/Lagos, change the function body to:
---   select (now() at time zone 'UTC')::date;
--- …then re-run this file.
+-- all.sql — ShiftOS minimal backend (public.shifts + RLS + RPC)
 
-create extension if not exists pgcrypto;
-
--- === "Today" helper =========================================================
-create or replace function public.shift_today()
-returns date
-language sql
-stable
-as $$
-  select timezone('Africa/Lagos', now())::date
-$$;
-
--- === TABLE ==================================================================
+-- 1) Table
 create table if not exists public.shifts (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null,
-  shift_date date not null default public.shift_today(),
-  win text,
-  inserted_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  id           bigserial primary key,
+  user_id      uuid not null references auth.users(id) on delete cascade,
+  shift_date   date not null default (current_date),
+  win          text not null default '',
+  inserted_at  timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  unique (user_id, shift_date)
 );
 
--- Unique per (user_id, shift_date)
-do $$
-begin
-  if not exists (
-    select 1 from pg_constraint
-    where conname = 'shifts_user_id_shift_date_key'
-  ) then
-    alter table public.shifts
-      add constraint shifts_user_id_shift_date_key unique (user_id, shift_date);
-  end if;
-end $$;
-
--- === TRIGGER: enforce auth.uid() & immutable date ===========================
-create or replace function public.set_shifts_defaults()
+-- 2) Updated-at trigger
+create or replace function public.set_updated_at()
 returns trigger
 language plpgsql
-security definer
-set search_path = public
 as $$
 begin
-  if TG_OP = 'INSERT' then
-    new.user_id := auth.uid();
-    if new.shift_date is null then
-      new.shift_date := public.shift_today();
-    end if;
-    new.inserted_at := now();
-    new.updated_at := now();
-  elsif TG_OP = 'UPDATE' then
-    -- keep ownership & date stable
-    new.user_id := old.user_id;
-    new.shift_date := old.shift_date;
-    new.updated_at := now();
-  end if;
+  new.updated_at := now();
   return new;
 end;
 $$;
 
-drop trigger if exists trg_set_shifts_defaults on public.shifts;
-create trigger trg_set_shifts_defaults
-before insert or update on public.shifts
-for each row execute function public.set_shifts_defaults();
+drop trigger if exists set_updated_at_on_shifts on public.shifts;
+create trigger set_updated_at_on_shifts
+before update on public.shifts
+for each row execute function public.set_updated_at();
 
--- === RLS ====================================================================
+-- 3) RLS
 alter table public.shifts enable row level security;
 
-drop policy if exists "Select own shifts" on public.shifts;
-create policy "Select own shifts"
-on public.shifts for select
-using (user_id = auth.uid());
+-- Policy: read own rows
+drop policy if exists "shifts_read_own" on public.shifts;
+create policy "shifts_read_own"
+on public.shifts
+for select
+using (auth.uid() = user_id);
 
-drop policy if exists "Insert own shift" on public.shifts;
-create policy "Insert own shift"
-on public.shifts for insert
-with check (user_id = auth.uid());
+-- Policy: insert own rows
+drop policy if exists "shifts_insert_own" on public.shifts;
+create policy "shifts_insert_own"
+on public.shifts
+for insert
+with check (auth.uid() = user_id);
 
-drop policy if exists "Update own shift" on public.shifts;
-create policy "Update own shift"
-on public.shifts for update
-using (user_id = auth.uid())
-with check (user_id = auth.uid());
+-- Policy: update own rows
+drop policy if exists "shifts_update_own" on public.shifts;
+create policy "shifts_update_own"
+on public.shifts
+for update
+using (auth.uid() = user_id)
+with check (auth.uid() = user_id);
 
-drop policy if exists "Delete own shift" on public.shifts;
-create policy "Delete own shift"
-on public.shifts for delete
-using (user_id = auth.uid());
+-- (No delete policy -> deletes are denied by default)
 
--- === RPC: upsert one row per (user, today) =================================
-create or replace function public.upsert_today_shift(p_win text default null)
+-- 4) RPC: upsert_today_shift(p_win)
+create or replace function public.upsert_today_shift(p_win text)
 returns public.shifts
 language plpgsql
-security definer
-set search_path = public
 as $$
 declare
-  v_user uuid := auth.uid();
-  v_date date := public.shift_today();
   v_row public.shifts;
 begin
-  if v_user is null then
-    raise exception 'Not authenticated';
-  end if;
-
   insert into public.shifts (user_id, shift_date, win)
-  values (v_user, v_date, p_win)
+  values (auth.uid(), current_date, coalesce(p_win, ''))
   on conflict (user_id, shift_date)
-  do update set
-    win = coalesce(excluded.win, public.shifts.win),
-    updated_at = now()
+  do update set win = excluded.win, updated_at = now()
   returning * into v_row;
 
   return v_row;
 end;
 $$;
 
--- Allow only signed-in users to call the RPC
-revoke all on function public.upsert_today_shift(text) from public;
+-- Grant execute to logged-in users
 grant execute on function public.upsert_today_shift(text) to authenticated;
