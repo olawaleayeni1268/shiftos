@@ -27,14 +27,15 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
-      # Make sure Gradle knows where the Flutter SDK is (no repo edits)
-      - name: Write local.properties (Flutter SDK path)
-        run: |
-          FLUTTER_ROOT=$(dirname $(dirname $(which flutter)))
-          echo "flutter.sdk=$FLUTTER_ROOT" > android/local.properties
+      # Build a RELEASE APK (unsigned) with your Supabase defines
+      - name: Flutter build release APK (unsigned)
+        run: >
+          flutter build apk --release
+          --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL }}
+          --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
 
-      # Create a keystore on the runner and use it to sign RELEASE (for MVP sideloading)
-      - name: Generate debug keystore (CI only)
+      # Create a temporary debug keystore on the runner to sign the APK
+      - name: Generate debug keystore (runner only)
         run: |
           mkdir -p ~/.android
           keytool -genkeypair -v \
@@ -48,28 +49,27 @@ jobs:
             -keysize 2048 \
             -validity 10000
 
-      # Encode --dart-define values as Base64 for Gradle (standard Flutter mechanism)
-      - name: Encode DART_DEFINES
-        id: encode
+      # Sign the APK using apksigner from the installed Android build-tools
+      - name: Sign APK with apksigner
         shell: bash
         run: |
-          RAW="SUPABASE_URL=${{ secrets.SUPABASE_URL }},SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}"
-          echo "b64=$(printf "%s" "$RAW" | base64 -w0)" >> "$GITHUB_OUTPUT"
-
-      # Build release using Gradle directly (inject dart-defines + signing) — no source changes
-      - name: Assemble release (inject dart-defines + signing)
-        working-directory: android
-        run: |
-          ./gradlew \
-            -Pdart-defines=${{ steps.encode.outputs.b64 }} \
-            -Pandroid.injected.signing.store.file=$HOME/.android/debug.keystore \
-            -Pandroid.injected.signing.store.password=android \
-            -Pandroid.injected.signing.key.alias=AndroidDebugKey \
-            -Pandroid.injected.signing.key.password=android \
-            assembleRelease
+          set -e
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+          # find latest build-tools apksigner
+          APKSIGNER=$(find "${ANDROID_SDK_ROOT}/build-tools" -type f -name apksigner | sort -V | tail -n1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "apksigner not found in \$ANDROID_SDK_ROOT/build-tools"; exit 1
+          fi
+          "$APKSIGNER" sign \
+            --ks "$HOME/.android/debug.keystore" \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --ks-key-alias AndroidDebugKey \
+            "$APK"
+          "$APKSIGNER" verify --print-certs "$APK"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: shiftos-mvp-apk
-          path: android/app/build/outputs/apk/release/app-release.apk
+          path: build/app/outputs/flutter-apk/app-release.apk
