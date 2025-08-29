@@ -1,0 +1,75 @@
+name: Android Release APK (ShiftOS)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      # Make sure Gradle knows where the Flutter SDK is (no repo edits)
+      - name: Write local.properties (Flutter SDK path)
+        run: |
+          FLUTTER_ROOT=$(dirname $(dirname $(which flutter)))
+          echo "flutter.sdk=$FLUTTER_ROOT" > android/local.properties
+
+      # Create a keystore on the runner and use it to sign RELEASE (for MVP sideloading)
+      - name: Generate debug keystore (CI only)
+        run: |
+          mkdir -p ~/.android
+          keytool -genkeypair -v \
+            -storetype JKS \
+            -keystore ~/.android/debug.keystore \
+            -storepass android \
+            -keypass android \
+            -alias AndroidDebugKey \
+            -dname "CN=Android,O=Android,C=US" \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000
+
+      # Encode --dart-define values as Base64 for Gradle (standard Flutter mechanism)
+      - name: Encode DART_DEFINES
+        id: encode
+        shell: bash
+        run: |
+          RAW="SUPABASE_URL=${{ secrets.SUPABASE_URL }},SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}"
+          echo "b64=$(printf "%s" "$RAW" | base64 -w0)" >> "$GITHUB_OUTPUT"
+
+      # Build release using Gradle directly (inject dart-defines + signing) — no source changes
+      - name: Assemble release (inject dart-defines + signing)
+        working-directory: android
+        run: |
+          ./gradlew \
+            -Pdart-defines=${{ steps.encode.outputs.b64 }} \
+            -Pandroid.injected.signing.store.file=$HOME/.android/debug.keystore \
+            -Pandroid.injected.signing.store.password=android \
+            -Pandroid.injected.signing.key.alias=AndroidDebugKey \
+            -Pandroid.injected.signing.key.password=android \
+            assembleRelease
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiftos-mvp-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
